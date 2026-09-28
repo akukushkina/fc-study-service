@@ -1,1 +1,218 @@
-# study-service
+# Design Document — Study Service
+
+**Technology**: Spring Boot 3.3, Java 21, Spring Data MongoDB, OpenFeign, Apache Kafka  
+**Exposes (via gateway)**:
+- `POST /api/v1/sessions` — start session
+- `GET  /api/v1/sessions/{sessionId}`
+- `POST /api/v1/sessions/{sessionId}/reviews` — submit review
+- `GET  /api/v1/sessions/{sessionId}/reviews`
+
+**Feign clients**:
+- `DeckCardServiceClient` → deck-card-service
+    - `GET /internal/decks/{deckId}/due-cards?limit=50`
+    - `PATCH /internal/cards/{cardId}/sm2` — update SM-2 state post-review
+
+**Kafka produced topics**: `study.session.completed`, `card.reviewed`, `streak.updated`
+
+**Key components**:
+
+| Component | Responsibility |
+|---|---|
+| `StudySessionService` | Creates sessions, fetches due cards via Feign, enforces 50-card cap, manages session state machine (ACTIVE → COMPLETED) |
+| `ReviewService` | Records review, delegates to `Sm2Calculator`, calls Feign to update card SM-2 state |
+| `Sm2Calculator` | **Pure function**: computes new Interval and EaseFactor from current state + quality rating |
+| `SessionCompletionHandler` | Publishes `study.session.completed` and `card.reviewed` events to Kafka |
+| `SessionStateGuard` | Rejects out-of-session or duplicate reviews with HTTP 409 |
+
+---
+
+## This microservice is one of Flashcard app
+
+## Overview
+
+The Flashcard Service is a production-grade, domain-driven **microservices** system built on Spring Boot 3.3 / Java 21. It enables users to manage flashcard decks, conduct spaced-repetition study sessions, and track learning progress over time. The system is composed of six independently deployable services, each owning its own datastore, communicating via synchronous REST (OpenFeign) and asynchronous Apache Kafka events, and deployed to Kubernetes.
+
+### Design Goals
+
+- **Domain isolation**: each service owns its bounded context and data; no shared databases.
+- **Full independence**: each service is a self-contained Maven project with its own `pom.xml`, its own Git repository, and its own CI/CD pipeline. There is no shared library, no common parent POM, and no shared code between services.
+- **Correctness by specification**: SM-2 algorithm and all business rules are pure, testable functions.
+- **Observable by default**: every service emits structured JSON logs, Prometheus metrics, and OpenTelemetry traces from day one.
+- **Secure by default**: JWT RS256 validation and rate limiting at the API gateway; downstream services trust the injected `X-User-Id` header.
+- **Cloud-agnostic**: Kubernetes manifests work on AWS EKS, GCP GKE, and Azure AKS without modification.
+
+### No Shared Library Policy
+
+Each of the six services is **fully independent**:
+
+- Each service has its own `pom.xml` with `spring-boot-starter-parent` as its only parent.
+- DTOs (e.g. `ApiResponse<T>`), exception classes (`ResourceNotFoundException`, etc.), Feign error decoders, Logback configuration, and MDC filters are **re-implemented inside each service** that needs them. This is intentional — shared libraries create hidden coupling between services and make independent deployability harder.
+- Each service lives in its own **Git repository** with its own GitHub Actions workflow.
+- Inter-service contracts (the shape of Feign client interfaces and Kafka event payloads) are documented in this design document and kept in sync through **API contract tests** (Spring Cloud Contract, optional) rather than shared code.
+
+---
+
+## Architecture
+
+### High-Level Service Topology
+
+```mermaid
+graph TD
+    Client([Client / Browser / Mobile])
+    GW[api-gateway\nSpring Cloud Gateway]
+    US[user-service\nMySQL 8]
+    DCS[deck-card-service\nMongoDB]
+    SS[study-service\nMongoDB]
+    STS[stats-service\nMongoDB]
+    BS[batch-service\nMongoDB + H2]
+    K[(Apache Kafka)]
+
+    Client -->|HTTPS| GW
+    GW -->|/api/v1/auth/**| US
+    GW -->|/api/v1/decks/**| DCS
+    GW -->|/api/v1/sessions/**| SS
+    GW -->|/api/v1/stats/**| STS
+    GW -->|/api/v1/jobs/**| BS
+
+    SS -->|Feign: due cards, SM-2 updates| DCS
+    STS -->|Feign: card SM-2 state| DCS
+    BS -->|Feign: read/write cards + create AI-generated cards| DCS
+
+    SS -->|study.session.completed\ncard.reviewed| K
+    STS -->|streak.updated| K
+    BS -->|report.generated\nimport.job.completed\nimport.job.failed| K
+    K -->|study.session.completed\ncard.reviewed| STS
+    K -->|import.job.created| BS
+```
+
+## AI-Powered Card Generation
+
+batch-service handles AI card generation from uploaded files. deck-card-service is not involved in file handling or AI calls — it only receives standard `POST /api/v1/decks/{deckId}/cards` calls from batch-service via Feign after cards are extracted.
+
+**Flow:**
+```
+User uploads file (TXT, PDF, CSV, DOCX) → batch-service stores in S3
+  → Kafka: import.job.created
+    → batch-service consumer calls AI provider (OpenAI / AWS Bedrock)
+      → for each valid {front, back} pair:
+          POST /api/v1/decks/{deckId}/cards via Feign → deck-card-service
+        → Kafka: import.job.completed (or import.job.failed)
+```
+
+**Supported formats:** TXT, PDF, CSV (`front,back` columns), DOCX  
+**Max file size:** 10MB  
+**Processing:** asynchronous — user gets immediate acknowledgement, cards appear when job completes
+
+---
+
+All six services implement an identical observability stack:
+
+| Concern | Implementation |
+|---|---|
+| Structured logging | Logback + `logstash-logback-encoder`; JSON to stdout with fields: `timestamp`, `level`, `traceId`, `spanId`, `userId`, `service`, `message`, `context` |
+| Metrics | Micrometer + Prometheus; `/actuator/prometheus` per service |
+| Distributed tracing | OpenTelemetry Java Agent; W3C `traceparent` header propagated inbound HTTP → outbound Feign → Kafka headers → DB spans → AI provider calls |
+| Service identity | `OTEL_SERVICE_NAME` env var set per service |
+
+Trace propagation flow:
+
+```
+Client → api-gateway [W3C traceparent]
+  → downstream service [X-B3/W3C forwarded by Gateway]
+    → Feign call to deck-card-service [traceparent injected by OTel agent]
+      → Kafka event [traceId in event payload + Kafka header]
+        → consuming service [traceId extracted from header]
+```
+
+---
+
+## Security Architecture
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as api-gateway
+    participant US as user-service
+    participant DS as deck-card-service
+
+    C->>GW: POST /api/v1/auth/login
+    GW->>US: POST /api/v1/auth/login (no JWT check — public route)
+    US-->>GW: 200 { jwt, refreshToken }
+    GW-->>C: 200 { jwt, refreshToken }
+
+    C->>GW: GET /api/v1/decks (Authorization: Bearer <jwt>)
+    GW->>GW: Validate RS256 JWT
+    GW->>GW: Rate limit check
+    GW->>GW: HTML sanitisation
+    GW->>DS: GET /api/v1/decks (X-User-Id: <userId>)
+    DS->>DS: Extract ownerId from X-User-Id
+    DS-->>GW: 200 { decks }
+    GW-->>C: 200 { decks } + security headers
+```
+
+Key security decisions:
+
+- **JWT validation is not duplicated** in downstream services. Services trust the `X-User-Id` header injected by the gateway.
+- **BCrypt cost 12** used for password storage. Plaintext never stored or logged.
+- **Refresh tokens** stored as SHA-256 hashes; plaintext never stored.
+- **RS256** enforced at gateway; `alg` claim checked to prevent algorithm confusion attacks.
+- **Parameterised queries only** in user-service (JPA/HQL); Spring Data MongoDB typed query objects in all MongoDB services.
+
+---
+
+## Kubernetes Deployment Architecture
+
+```mermaid
+graph TD
+    Ingress[Kubernetes Ingress\nNGINX / Cloud ALB]
+    GW_D[api-gateway\nDeployment + HPA]
+    US_D[user-service\nDeployment + HPA]
+    DCS_D[deck-card-service\nDeployment + HPA]
+    SS_D[study-service\nDeployment + HPA]
+    STS_D[stats-service\nDeployment + HPA]
+    BS_D[batch-service\nDeployment + HPA]
+    MySQL[(MySQL 8\nPersistentVolume)]
+    Mongo[(MongoDB\nPersistentVolume)]
+    KafkaC[(Apache Kafka\nStatefulSet / Managed)]
+
+    Ingress --> GW_D
+    GW_D --> US_D & DCS_D & SS_D & STS_D & BS_D
+    US_D --> MySQL
+    DCS_D & SS_D & STS_D & BS_D --> Mongo
+    SS_D & STS_D & BS_D --> KafkaC
+```
+
+Each service Deployment includes:
+- `livenessProbe`: `GET /actuator/health/liveness`, initialDelaySeconds: 30, periodSeconds: 10
+- `readinessProbe`: `GET /actuator/health/readiness`, initialDelaySeconds: 20, periodSeconds: 5
+- `terminationGracePeriodSeconds`: 35 (30s grace + 5s buffer)
+- Secrets via `envFrom: secretRef` (DB creds, JWT keypair, Kafka creds)
+- ConfigMaps for service URLs, topic names, non-sensitive config
+
+---
+
+## DevSecOps Pipeline
+
+One GitHub Actions workflow **per service Git repository** (each service is independently built and deployed):
+
+```
+Trigger: push to main, PR to main (in each service's own repo)
+│
+├── 1. Compile (mvn compile)
+├── 2. Unit Tests (mvn test) + JaCoCo coverage gate ≥ 80%
+├── 3. Integration Tests (Testcontainers: MySQL/MongoDB + Kafka)
+├── 4. SAST (SpotBugs)
+├── 5. Dependency Scan (OWASP Dependency-Check)
+├── 6. Secrets Detection (Gitleaks)
+├── 7. Docker Build (multi-stage, tag: {git-sha}-{run-number})
+├── 8. Container Image Scan (Trivy — fail on CRITICAL/HIGH)
+└── 9. Kubernetes Deploy (kubectl apply + rollout status --timeout=120s)
+     └── Auto-rollback if readiness/liveness probes fail within 120s
+```
+
+Secrets management:
+- GitHub Actions encrypted secrets (configured per repo) → injected as env vars at runtime → mounted as Kubernetes Secrets
+- Never written to Dockerfile, pipeline YAML, or container layers
+- Each service repo configures only the secrets it needs (e.g. user-service needs `JWT_PRIVATE_KEY` and `MYSQL_PASSWORD`; deck-card-service needs only `MONGODB_URI`; batch-service needs `MONGODB_URI`, `AI_PROVIDER_API_KEY`, and `S3_BUCKET_NAME`)
+
+---
