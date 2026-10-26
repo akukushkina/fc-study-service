@@ -5,9 +5,15 @@ spring:
   application:
     name: fc-study-service
 
+#    links to other services
+fc:
+  deck-service:
+    base:
+      url: "http://localhost:8080"
+
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/study_sm_db}
+      uri: ${MONGODB_URI:mongodb://localhost:27017/study_db}
       auto-index-creation: true
 
   jackson:

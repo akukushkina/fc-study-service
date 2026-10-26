@@ -15,7 +15,7 @@ import java.time.LocalDate;
 public class DueCard {
     private String id;
     private String deckId;
-    private String ownerId;
+    private String userId;
     private String front;
     private String back;
     private Float easeFactor;

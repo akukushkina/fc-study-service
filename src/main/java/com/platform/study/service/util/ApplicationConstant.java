@@ -22,4 +22,7 @@ public class ApplicationConstant {
 
     public static final String HEADER_VALIDATION = "X-User-Id must be a valid numeric MySQL ID";
 
+//    constants
+    public static final String USER_ID = "X-User-Id";
+
 }
