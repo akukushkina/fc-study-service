@@ -41,6 +41,16 @@ public class GlobalControllerAdvice {
         return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(SessionNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleSessionNotFoundException(SessionNotFoundException ex, WebRequest request) {
+        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(CardNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleCardNotFoundException(CardNotFoundException ex, WebRequest request) {
+        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
     @ExceptionHandler(ValidationException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(ValidationException ex, WebRequest request) {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
