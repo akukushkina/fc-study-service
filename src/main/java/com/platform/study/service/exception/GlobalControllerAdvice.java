@@ -41,19 +41,24 @@ public class GlobalControllerAdvice {
         return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(SessionNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleSessionNotFoundException(SessionNotFoundException ex, WebRequest request) {
-        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
-    }
-
-    @ExceptionHandler(CardNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleCardNotFoundException(CardNotFoundException ex, WebRequest request) {
-        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
-    }
-
     @ExceptionHandler(ValidationException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(ValidationException ex, WebRequest request) {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(CardAlreadyReviewedException.class)
+    public ResponseEntity<ErrorResponse> handleCardAlreadyReviewedException(CardAlreadyReviewedException ex, WebRequest request) {
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(CardDoesnotBelongToSessionException.class)
+    public ResponseEntity<ErrorResponse> handleCardDoesnotBelongToSessionException(CardDoesnotBelongToSessionException ex, WebRequest request) {
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(SessionIsNotActiveException.class)
+    public ResponseEntity<ErrorResponse> handleSessionIsNotActiveException(SessionIsNotActiveException ex, WebRequest request) {
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
     @ExceptionHandler(Exception.class)

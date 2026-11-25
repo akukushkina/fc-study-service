@@ -2,10 +2,7 @@ package com.platform.study.service.service.impl;
 
 import com.platform.study.service.entity.ReviewsEntity;
 import com.platform.study.service.entity.SessionEntity;
-import com.platform.study.service.exception.CardNotFoundException;
-import com.platform.study.service.exception.ForbiddenException;
-import com.platform.study.service.exception.ResourceNotFoundException;
-import com.platform.study.service.exception.SessionNotFoundException;
+import com.platform.study.service.exception.*;
 import com.platform.study.service.model.request.ReviewRequest;
 import com.platform.study.service.model.response.ReviewResponse;
 import com.platform.study.service.repository.ReviewRepository;
@@ -38,11 +35,11 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         if(!sessionEntity.getStatus().equals("ACTIVE")){
-            throw new SessionNotFoundException("This session is not active anymore: " + sessionId);
+            throw new SessionIsNotActiveException("This session is not active anymore: " + sessionId);
         }
 
         if(!sessionEntity.getCardIds().contains(reviewRequest.getCardId())){
-            throw new CardNotFoundException("The card does not belong to this session");
+            throw new CardDoesnotBelongToSessionException("The card does not belong to this session");
         }
 
         List<ReviewsEntity> reviewsEntityList = reviewRepository.findAllBySessionId(sessionId);

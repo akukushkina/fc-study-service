@@ -20,7 +20,7 @@ public class ApplicationConstant {
     public static final String CODE_404_DESC = "Not Found - Resource does not exist";
     public static final String CODE_500_DESC = "Internal Server Error - Unexpected failure";
 
-    public static final String HEADER_VALIDATION = "X-User-Id must be a valid numeric MySQL ID";
+    public static final String HEADER_VALIDATION = "X-User-Id header is required";
 
 //    constants
     public static final String USER_ID = "X-User-Id";

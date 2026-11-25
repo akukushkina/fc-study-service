@@ -6,6 +6,7 @@ import com.platform.study.service.model.response.ReviewResponse;
 import com.platform.study.service.model.response.SessionResponse;
 import com.platform.study.service.service.ReviewService;
 import com.platform.study.service.service.StudyService;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -39,7 +40,7 @@ public class StudyServiceController extends BaseApiController{
 
     @PostMapping("/{sessionId}/reviews")
     public ResponseEntity<ReviewResponse> reviews(@NotBlank(message = HEADER_VALIDATION) @RequestHeader("X-User-Id") String userId,
-                                                 @RequestBody ReviewRequest reviewRequest,
+                                                 @Valid @RequestBody ReviewRequest reviewRequest,
                                                   @PathVariable("sessionId") String sessionId){
         log.info("Entering into reviews method");
 
